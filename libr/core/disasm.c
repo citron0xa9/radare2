@@ -6049,6 +6049,7 @@ toro:
 			// TODO: check for ds->analop.type and ret
 			ds->dest = ds->analop.jump;
 		}
+        r_anal_op_fini(&ds->analop);
 	} else {
 		/* highlight eip */
 		const char *pc = core->anal->reg->name[R_REG_NAME_PC];
@@ -6542,8 +6543,8 @@ toro:
 			inc = 1;
 		}
 		inc += ds->asmop.payload + (ds->asmop.payload % ds->core->rasm->dataalign);
+        r_anal_op_fini (&ds->analop);
 	}
-	r_anal_op_fini (&ds->analop);
 
 	R_FREE (nbuf);
 	r_cons_break_pop ();
@@ -6873,6 +6874,213 @@ R_API int r_core_print_disasm_instructions(RCore *core, int nb_bytes, int nb_opc
 	}
 	r_core_seek (core, ocore_offset, true);
 	return ret;
+}
+
+R_API int r_core_print_disasm_struct(RCore *core, ut64 addr, int nb_opcodes, RDisasmInfo* disasmInfo, int* disasmInfoCount) {
+    RDisasmState *ds;
+    RAnalFunction *f;
+    int i, j, k, ret, line;
+    ut64 old_offset = core->offset;
+    ut64 at;
+    int dis_opcodes = 0;
+    char str[512];
+    int nb_bytes = core->blocksize;
+    ut8* buf = core->block;
+    int infoMaxsize = abs(nb_opcodes);
+    *disasmInfoCount = 0;
+
+    r_core_seek(core, addr, true);
+
+    if (nb_opcodes == 0) {
+        R_LOG_ERROR ("No instruction count given");
+        return false;
+    }
+
+    if (nb_opcodes < 0) {
+        int count, nbytes = 0;
+
+        /* Backward disassembly of `nb_opcodes` opcodes:
+         * - We compute the new starting offset
+         * - Read at the new offset */
+        nb_opcodes = -nb_opcodes;
+
+        if (nb_opcodes > 0xffff) {
+            R_LOG_ERROR ("Too many backward instructions");
+            return false;
+        }
+
+        if (r_core_prevop_addr (core, core->offset, nb_opcodes, &addr)) {
+            nbytes = old_offset - addr;
+        } else if (!r_core_asm_bwdis_len (core, &nbytes, &addr, nb_opcodes)) {
+            /* workaround to avoid empty arrays */
+#define BWRETRY 0
+#if BWRETRY
+            nb_opcodes ++;
+            if (!r_core_asm_bwdis_len (core, &nbytes, &addr, nb_opcodes)) {
+#endif
+            return false;
+#if BWRETRY
+            }
+#endif
+            nb_opcodes --;
+        }
+        count = R_MIN (nb_bytes, nbytes);
+        if (count > 0) {
+            r_io_read_at (core->io, addr, buf, count);
+            r_io_read_at (core->io, addr + count, buf + count, nb_bytes - count);
+        } else {
+            if (nb_bytes > 0) {
+                memset (buf, 0xff, nb_bytes);
+            }
+        }
+    } else {
+        // If we are disassembling a positive number of lines, enable dis_opcodes
+        // to be used to finish the loop
+        // If we are disasembling a negative number of lines, we just calculate
+        // the equivalent addr and nb_size and scan a positive number of BYTES
+        // so keep dis_opcodes = 0;
+        dis_opcodes = 1;
+        r_io_read_at (core->io, addr, buf, nb_bytes);
+    }
+    core->offset = addr;
+
+    // TODO: add support for anal hints
+    // If using #bytes i = j
+    // If using #opcodes, j is the offset from start address. i is the
+    // offset in current disassembly buffer (256 by default)
+    i = k = j = line = 0;
+    // i = number of bytes
+    // j = number of instructions
+    // k = delta from addr
+    ds = ds_init (core);
+    const bool be = R_ARCH_CONFIG_IS_BIG_ENDIAN (core->rasm->config);
+
+    for (;;) {
+        RAnalOp asmop;
+        bool end_nbopcodes, end_nbbytes;
+        int skip_bytes_flag = 0, skip_bytes_bb = 0;
+
+        at = addr + k;
+        ds_hint_begin (ds, ds->at);
+        r_asm_set_pc (core->rasm, at);
+        // 32 is the biggest opcode length in intel
+        // Make sure we have room for it
+        if (dis_opcodes == 1 && i >= nb_bytes - 32) {
+            // Read another nb_bytes bytes into buf from current offset
+            r_io_read_at (core->io, at, buf, nb_bytes);
+            i = 0;
+        }
+
+        if (j >= nb_opcodes) {
+            break;
+        }
+        if (j >= infoMaxsize) {
+            R_LOG_ERROR ("disasmInfoArray is to small");
+            return false;
+        }
+        RDisasmInfo* currentDisasmInfo = disasmInfo+j;
+        currentDisasmInfo->offset = 0;
+        currentDisasmInfo->size = 0;
+        currentDisasmInfo->type = "";
+        currentDisasmInfo->opcode[0] = 0;
+        currentDisasmInfo->disasm[0] = 0;
+        currentDisasmInfo->hasJump = false;
+        ++(*disasmInfoCount);
+
+        ret = r_asm_disassemble (core->rasm, &asmop, buf + i, nb_bytes - i);
+        if (ret < 1) {
+            currentDisasmInfo->offset = at;
+            currentDisasmInfo->size = 1;
+            currentDisasmInfo->type = "invalid";
+            i++;
+            k++;
+            j++;
+            continue;
+        }
+
+        char opstr[256];
+        r_str_ncpy (opstr, r_asm_op_get_asm (&asmop), sizeof (opstr) - 1);
+
+        ds->has_description = false;
+        r_anal_op_fini (&ds->analop);
+        r_anal_op (core->anal, &ds->analop, at, buf + i, nb_bytes - i, R_ARCH_OP_MASK_ALL);
+
+        if (ds->pseudo) {
+            r_parse_parse (core->parser, opstr, opstr);
+        }
+
+        // f = r_anal_get_fcn (core->anal, at,
+        f = fcnIn (ds, at, R_ANAL_FCN_TYPE_FCN | R_ANAL_FCN_TYPE_SYM | R_ANAL_FCN_TYPE_LOC);
+        if (ds->subvar && f) {
+            int ba_len = strlen (asmop.mnemonic) + 128;
+            char *ba = malloc (ba_len);
+            if (ba) {
+                strcpy (ba, r_asm_op_get_asm (&asmop));
+                r_parse_subvar (core->parser, f, at, ds->analop.size,
+                                ba, ba, ba_len);
+                r_asm_op_set_asm (&asmop, ba);
+                free (ba);
+            }
+        }
+        ds->oplen = r_asm_op_get_size (&asmop);
+        ds->at = at;
+        skip_bytes_flag = handleMidFlags (core, ds, false);
+        if (ds->midbb) {
+            skip_bytes_bb = handleMidBB (core, ds);
+        }
+        if (skip_bytes_flag && ds->midflags > R_MIDFLAGS_SHOW) {
+            ds->oplen = ret = skip_bytes_flag;
+        }
+        if (skip_bytes_bb && skip_bytes_bb < ret) {
+            ds->oplen = ret = skip_bytes_bb;
+        }
+        {
+            ut64 killme = UT64_MAX;
+            if (r_io_read_i (core->io, ds->analop.ptr, &killme, ds->analop.refptr, be)) {
+                core->parser->subrel_addr = killme;
+            }
+        }
+        {
+            char *aop = r_asm_op_get_asm (&asmop);
+            char *tmp_buf = malloc (strlen (aop) + 128);
+            if (tmp_buf) {
+                strcpy (tmp_buf, aop);
+                tmp_buf = ds_sub_jumps (ds, tmp_buf);
+                r_parse_filter (core->parser, ds->vat, core->flags, ds->hint, tmp_buf,
+                                str, sizeof (str) - 1, be);
+                str[sizeof (str) - 1] = '\0';
+                r_asm_op_set_asm (&asmop, tmp_buf);
+                free (tmp_buf);
+            }
+        }
+
+        currentDisasmInfo->offset = at;
+        currentDisasmInfo->size = ds->analop.size;
+        if (strncpy_s(currentDisasmInfo->opcode, sizeof(currentDisasmInfo->opcode), opstr, sizeof(opstr)) != 0) {
+            R_LOG_ERROR ("Failed to copy opcode to disasm info");
+        }
+        if (strncpy_s(currentDisasmInfo->disasm, sizeof(currentDisasmInfo->disasm), str, sizeof(str)) != 0) {
+            R_LOG_ERROR ("Failed to copy disassembly to disasm info");
+        }
+        currentDisasmInfo->type = r_anal_optype_tostring (ds->analop.type);
+        currentDisasmInfo->hasJump = ds->analop.jump != UT64_MAX;
+        currentDisasmInfo->jumpAddress = ds->analop.jump;
+
+        i += ds->oplen + asmop.payload + (ds->asmop.payload % ds->core->rasm->dataalign); // bytes
+        k += ds->oplen + asmop.payload + (ds->asmop.payload % ds->core->rasm->dataalign); // delta from addr
+        j++; // instructions
+        line++;
+
+        end_nbopcodes = dis_opcodes == 1 && nb_opcodes > 0 && line>=nb_opcodes;
+        end_nbbytes = dis_opcodes == 0 && nb_bytes > 0 && i>=nb_bytes;
+        r_anal_op_fini (&asmop);
+        if (end_nbopcodes || end_nbbytes) {
+            break;
+        }
+    }
+    r_anal_op_fini (&ds->analop);
+    ds_free (ds);
+    return true;
 }
 
 R_API int r_core_print_disasm_json(RCore *core, ut64 addr, ut8 *buf, int nb_bytes, int nb_opcodes, PJ *pj) {

@@ -1,8 +1,7 @@
 @echo off
 REM call preconfigure.bat
 
-set MESON_FLAGS=-Dsdb_cgen=false
-
+set MESON_FLAGS=-Dsdb_cgen=false --cmake-prefix-path "C:/Users/Leonie/Documents/neural-decompiler/MemoryProfiling/install/lib/cmake/TracyMemoryProfiling"
 if "%*" == "asan" (
   set MESON_FLAGS=%MESON_FLAGS% -Dwasan=true
 )
@@ -14,6 +13,7 @@ if "%*" == "static" (
 if "%*" == "release" (
   set MESON_FLAGS=%MESON_FLAGS% --buildtype=release
 )
+set MESON_FLAGS=%MESON_FLAGS% --buildtype=release
 
 set PATH=%CD%\prefix\bin;%PATH%
 set WORKS=0

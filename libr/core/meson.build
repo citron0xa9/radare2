@@ -77,6 +77,7 @@ r_core_sources = [
 r_core_inc = []
 r_core_inc = [platform_inc, include_directories(r_core_inc)]
 
+tracy_dep = dependency('TracyMemoryProfiling', method: 'cmake', required: true)
 r_core_deps = [
   r_util_dep,
   r_reg_dep,
@@ -102,7 +103,9 @@ r_core_deps = [
   platform_deps,
   gdb_dep,
   java_dep,
-  lrt
+  lrt,
+  tracy_dep,
+  pth
 ]
 
 if use_libuv

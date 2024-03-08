@@ -457,6 +457,7 @@ R_API RBin *r_core_get_bin(RCore *core);
 R_API RConfig *r_core_get_config(RCore *core);
 R_API bool r_core_init(RCore *core);
 R_API void r_core_bind_cons(RCore *core); // to restore pointers in cons
+R_API void r_core_free_cmd_str(char* string);
 R_API RCore *r_core_new(void);
 R_API void r_core_free(RCore *core);
 R_API void r_core_fini(RCore *c);
@@ -721,7 +722,19 @@ enum r_pdu_condition_t {
 	pdu_instruction,
 	pdu_opcode
 };
+
+typedef struct r_disasm_info_t {
+    ut64 offset;
+    int size;
+    const char* type;
+    char opcode[256];
+    char disasm[512];
+    bool hasJump;
+    ut64 jumpAddress;
+} RDisasmInfo;
+
 R_API int r_core_print_disasm(RCore *core, ut64 addr, ut8 *buf, int len, int count, enum r_pdu_condition_t pdu_condition_type, const void *pdu_condition, bool count_bytes, bool json, PJ *pj, RAnalFunction *pdf);
+R_API int r_core_print_disasm_struct(RCore *core, ut64 addr, int nb_opcodes, RDisasmInfo* disasmInfo, int* disasmInfoCount);
 R_API int r_core_print_disasm_json(RCore *core, ut64 addr, ut8 *buf, int len, int lines, PJ *pj);
 R_API int r_core_print_disasm_instructions_with_buf(RCore *core, ut64 address, ut8 *buf, int nb_bytes, int nb_opcodes);
 R_API int r_core_print_disasm_instructions(RCore *core, int nb_bytes, int nb_opcodes);

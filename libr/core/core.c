@@ -954,11 +954,38 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 	return ret;
 }
 
+R_API void r_core_free_cmd_str(char* string)
+{
+    free(string);
+}
+
+#if 0
+uint8_t initAllocHooks()
+{
+    const char* modulesToProfile[] = {
+            "r_anal.dll", "r_arch.dll", "r_asm.dll", "r_bin.dll",
+            "r_bp.dll", "r_config.dll", "r_cons.dll", "r_core.dll",
+            "r_crypto.dll", "r_debug.dll", "r_egg.dll", "r_esil.dll",
+            "r_flag.dll", "r_fs.dll", "r_io.dll", "r_lang.dll",
+            "r_magic.dll", "r_reg.dll", "r_search.dll",
+            "r_socket.dll", "r_syscall.dll", "r_util.dll"};
+    //return initMemoryProfiling(modulesToProfile, sizeof(modulesToProfile)/sizeof(modulesToProfile[0]), 15);
+    return 1;
+}
+
+uint8_t deinitAllocHooks()
+{
+    //return deinitMemoryProfiling();
+    return 1;
+}
+#endif
+
 R_API RCore *r_core_new(void) {
 	RCore *c = R_NEW0 (RCore);
 	if (c) {
 		r_core_init (c);
 	}
+    //initAllocHooks();
 	return c;
 }
 
@@ -3471,6 +3498,7 @@ R_API void r_core_fini(RCore *c) {
 
 R_API void r_core_free(RCore *c) {
 	if (c) {
+        //deinitAllocHooks();
 		r_core_fini (c);
 		free (c);
 	}
